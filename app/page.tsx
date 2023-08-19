@@ -2,24 +2,16 @@
 import { randomUUID } from 'crypto';
 import Image from 'next/image'
 import { useEffect, useState, useRef } from 'react';
+import { Activity, ActivityTask} from './component/activity';
 const uuid = require('uuid');
 
-type Activity = {
-  name: string;
-  id: string;
-  timeTrackedInSec: number;
-  subActivities: Activity[];
-  isDone: boolean;
-}
-
 export default function Home() {
-  const [startDate, setStartDate]                 = useState(new Date())
-  const [workTimeInSec, setWorkTimeInSec]         = useState(0);
-  const [isTracking, setIsTracking] = useState(false);
+  const startDate           = useRef(new Date())
+  const workTimeInMs        = useRef(0);
+  
+  const lastActiveDate  = useRef<Date>();
   const currentActivity = useRef<Activity>();
-
-  const [isActive, setIsActive]                   = useState(false);
-  const [lastActiveDate, setLastActiveDate]       = useState(new Date());
+  const isActive        = useRef(false);
   const [inactiveTimeInSec, setInActiveTimeInSec] = useState(0);
   
   const [currentTime, setCurrentTime]             = useState(new Date());
@@ -27,42 +19,35 @@ export default function Home() {
   const [newActivityName, setNewActivityName]     = useState('');
   const [isClient, setIsClient] = useState(false)
 
-  const startTracking = (activity: Activity) => {
+  const startTracking = (activity: Activity | undefined) => {
     currentActivity.current = activity;
-    setIsTracking(true);
   }
 
   const stopTracking = () => {
     currentActivity.current = undefined;
-    setIsTracking(false);
+    workTimeInMs.current = 0;
   }
 
-  const updateTimer  = () => {
+  const updateTimer = () => {
     let date = new Date();
     // set tracking time in the case we are tracking
     if(currentActivity.current !== undefined){
-      let diff = date.getTime() - startDate.getTime(); 
-      let newWorkTimeInSec = Math.floor(diff / 1000)
-      setWorkTimeInSec(newWorkTimeInSec);
-      console.log(newWorkTimeInSec - workTimeInSec);
-      currentActivity.current.timeTrackedInSec += (newWorkTimeInSec - workTimeInSec);
-
-      let activeDiff = date.getTime() - lastActiveDate.getTime(); 
-      let inActiveInSec = Math.floor(activeDiff / 1000)
-      setInActiveTimeInSec(inactiveTimeInSec)
-      if(inActiveInSec > 5){
-        setIsActive(false);
+      let currentLastActiveDate = lastActiveDate.current ?? date;
+      let activeDiff = date.getTime() - currentLastActiveDate.getTime(); 
+      setInActiveTimeInSec(activeDiff/1000)
+      if(activeDiff > 5000){
+        isActive.current = false;
       }
 
-      if(inActiveInSec > 10){
-        currentActivity.current = undefined;
+      if(activeDiff > 10000){
+        stopTracking();
       }
     }
   }
 
   const onActive = () => {
-    setIsActive(true)
-    setLastActiveDate(new Date())
+    isActive.current = true;
+    lastActiveDate.current = new Date()
   }
 
   const createActivityForm = (e: React.FormEvent<HTMLFormElement>) => {
@@ -77,7 +62,7 @@ export default function Home() {
     let newActivity: Activity = {
       name: activityName,
       id: uuid.v4(),
-      timeTrackedInSec: 0,
+      timeTrackedInMs: 0,
       subActivities: [],
       isDone: false
     };
@@ -88,8 +73,9 @@ export default function Home() {
     setActivityList([newActivity]);
   }
 
-  const completeActivity = (activity: Activity) => {
-    activity.isDone = true;
+  const completeActivity = () => {
+    currentActivity.current = undefined;
+    lastActiveDate.current = new Date();
   }
 
   const updateStorage = () => {
@@ -122,17 +108,26 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    const updateTime = setTimeout(updateTimer, 1000);
-    return () => {
-      clearTimeout(updateTime);
-    };
+    if(isActive){
+      const updateTime = setTimeout(updateTimer, 200);
+      return () => {
+        clearTimeout(updateTime);
+      };
+    }
   })
 
-  useEffect(() => {
-    if(currentActivity){
-      setStartDate(new Date());
-    }
-  }, [currentActivity])
+  const renderActivity = (activity: Activity) => {
+    return ActivityTask({
+      activity,
+      startActivity: startTracking,
+      stopActivity: stopTracking,
+      completeActivity: completeActivity,
+      isCurrentActivity: currentActivity.current?.id === activity.id,
+      isActive,
+      startDate,
+      workTimeInMs
+    })
+  }
 
   const renderClock = () => {
     let hour = currentTime.getHours();
@@ -153,19 +148,6 @@ export default function Home() {
     )
   }
 
-  const renderActivity = (activity: Activity) => {
-    let isCurrentActivity = currentActivity.current && currentActivity.current.id === activity.id;
-    return (<div className='activity-container flex' key={activity.id}>
-      <div className='activity-name flex basis-1/2'>{activity.name}</div>
-      <div className='activity-tacktime flex basis-1/4'>Tracked time: {activity.timeTrackedInSec}</div>
-      <div className='activity-actions flex basis-1/4'> 
-        {!isCurrentActivity && <button className='activity-action-btn' onClick={() => startTracking(activity)}>Start</button>}
-        {isCurrentActivity && <button className='activity-action-btn' onClick={() => stopTracking}>Stop</button>}
-        <button className='activity-action-btn' onClick={() => completeActivity(activity)}>Mark as done</button>
-      </div>
-    </div>);
-  }
-
   return (isClient &&
     <main className="flex min-h-screen flex-col items-center justify-between p-24">
       <div className='container'>
@@ -180,21 +162,23 @@ export default function Home() {
           </input>
           <button type='submit' className='activity-create-btn flex basis-1/4'>Create new activity</button>
         </form>
-        {activityList && activityList.map((element: Activity, index) => {
+        {activityList && activityList.filter(x => !x.isDone).map((element: Activity, index) => {
             return renderActivity(element);
           })
         }
-        <div className='timer'>
-          Current time: {workTimeInSec}
+        <div className='completed-container mt-1'>
+          <div className='activity-label'>Complated tasks</div>
+          {activityList && activityList.filter(x => x.isDone).map((element: Activity, index) => {
+              return renderActivity(element);
+            })
+          } 
         </div>
+
         <div className='activeTimer'>
           Inactive time: {inactiveTimeInSec}
         </div>
-        <div>Last active date {lastActiveDate.toISOString()}</div>
+        <div>Last active date {lastActiveDate.current ? lastActiveDate.current .toISOString() : (new Date()).toISOString()}</div>
         {!isActive && <div>No activity found</div>}
-        <div className='action-container'>
-          
-        </div>
       </div>
     </main>
   )
